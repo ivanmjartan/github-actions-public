@@ -1,0 +1,123 @@
+---
+# Copyright: (c) 2024, GoodData
+
+name: "PR comment"
+description: "Add PR comment with status and summary link"
+inputs:
+  vault-auth-path:
+    description: "Vault auth backend path to use (default usually okay)"
+    required: false
+    default: "jwt/github"
+  vault-auth-role:
+    description: "Vault auth role to use for common action"
+    default: "common-action"
+    required: false
+  vault-url:
+    description: "Vault API URL (default okay in almost all cases)"
+    required: true
+  vault-path-dynamic-token:
+    description: "Vault path of dynamic token"
+    required: false
+    default: "github/token/common-action"
+  job-reference:
+    description: "Reference job to get result"
+    required: true
+  comment:
+    description: "Comment template"
+    required: false
+    default: "### ${action} ${status} ${emoji}\n\nSee full output at ${url}."
+  delete-bot-comment:
+    description: "Delete bot comment"
+    required: false
+    default: "true"
+  pr-number:
+    description: "Number of PR to comment"
+    required: false
+    default: context.issue.number
+  repo-owner:
+    description: "Owner of the repository"
+    required: false
+    default: context.repo.owner
+  repo:
+    description: "Repository name"
+    required: false
+    default: context.repo.repo
+runs:
+  using: "composite"
+  steps:
+    - name: Get dynamic GitHub token
+      id: secrets
+      uses: hashicorp/vault-action@v3
+      with:
+        method: jwt
+        path: ${{ inputs.vault-auth-path }}
+        role: ${{ inputs.vault-auth-role }}
+        url: ${{ inputs.vault-url }}
+        secrets: |
+          ${{ inputs.vault-path-dynamic-token }} token | GITHUB_TOKEN ;
+    - name: Add PR comment
+      if: ${{ steps.secrets.outcome == 'success' }}
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ env.GITHUB_TOKEN }}
+        script: |
+          const number = ${{ inputs.pr-number }}
+          const owner = ${{ inputs.repo-owner }}
+          const repo = ${{ inputs.repo }}
+          const workflow_run_id = context.runId
+          if (!workflow_run_id) {
+            throw new Error(`There are no pull_request workflows running.`)
+          }
+          const { data: listJobs } = await github.rest.actions.listJobsForWorkflowRun({
+            owner: owner,
+            repo: repo,
+            run_id: workflow_run_id
+          })
+          const { jobs } = listJobs
+          let job = jobs.find(job => job.name == "${{ inputs.job-reference }}")
+          if (!job) {
+            throw new Error(`There are no jobs matching ${{ inputs.job-reference }} in the workflow.`)
+          }
+          const url = `${job.html_url}`
+          let action = `${job.name}`
+          let status = `${job.conclusion}`
+          let emoji = "";
+          if (!status || status == "null") {
+            status = "failed"
+          }
+          if (action) {
+            emoji = (status == 'success') ? ':rocket:' : ':boom:'
+          }
+          const output = `${{ inputs.comment }}`
+
+          if (${{ inputs.delete-bot-comment == 'true' }}) {
+            const currentDate = new Date().getTime()
+            const last30Minutes = new Date(currentDate - 30 * 60 * 1000).toISOString()
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: owner,
+              repo: repo,
+              issue_number: number,
+              since: last30Minutes
+            })
+            const botComments = comments && comments.filter(comment => {
+              return comment.user.type === 'Bot' && comment.body.includes(`${job.name}`)
+            })
+            const botComment = botComments.pop()
+            if (botComment) {
+              const { id } = botComment
+              const res = await github.rest.issues.deleteComment({
+                owner: owner,
+                repo: repo,
+                comment_id: id
+              })
+              if (res.status === 204) {
+                console.log(`Bot comment ${id} was deleted successfully!`)
+              }
+            }
+          }
+          github.rest.issues.createComment({
+            owner: owner,
+            repo: repo,
+            issue_number: number,
+            body: output
+          })
