@@ -1,0 +1,117 @@
+---
+# Copyright: (c) 2024, GoodData
+
+name: "Trigger Jenkins job"
+description: "Trigger Jenkins job through Jenkins API with given parameters"
+inputs:
+  comment-pr:
+    description: "Specifies whether the PR should be commented with job result"
+    default: "false"
+  slack-channel:
+    description: "Specifies which Slack channel to us to notify on failure"
+  slack-token:
+    description: "Slack bot token that needs to be passed from secrets"
+  server:
+    description: "Url of server the job should be run on"
+    required: true
+  folder:
+    description: "Path to folder containing the job to run"
+    required: true
+  job-name:
+    description: "Name of the job to run"
+    required: true
+  vault-url:
+    description: "Vault API URL"
+    required: true
+  params:
+    description: "Job build parameters in dict syntax"
+    required: true
+outputs:
+  job-build-status:
+    description: "Job build status"
+    value: ${{ steps.python.outputs.build_status }}
+  job-build-url:
+    description: "Job build URL"
+    value: ${{ steps.python.outputs.url }}
+runs:
+  using: "composite"
+  steps:
+    - name: Get certificate from Vault
+      id: cert-from-vault
+      uses: gooddata/github-actions-public/vault/cert@master
+      with:
+        cn: gh.action
+        role: github-common-action
+        vault-auth-role: common-action
+        vault-url: ${{ inputs.vault-url }}
+    - name: Join certificates
+      id: join-certs
+      run: |
+        echo "${{ steps.cert-from-vault.outputs.certificate }}" > cert.pem
+        echo "${{ steps.cert-from-vault.outputs.ca_chain }}" >> cert.pem
+        echo "${{ steps.cert-from-vault.outputs.private_key }}" >> cert.pem
+      shell: bash
+    - name: Run python script
+      id: python
+      run: python "${{ github.action_path }}/jenkins_job_trigger.py" cert.pem $SERVER $FOLDER $JOB "$PARAMS"
+      continue-on-error: true
+      shell: bash
+      env:
+        SERVER: ${{ inputs.server }}
+        FOLDER: ${{ inputs.folder }}
+        JOB: ${{ inputs.job-name }}
+        PARAMS: ${{ inputs.params }}
+    - name: Prepare result comment
+      id: result-comment
+      run: |
+        if [[ "${{ steps.python.outputs.url }}" != '' && "${{ steps.python.outputs.build_status }}" != '' ]]; then
+          result_comment="Job ${{ inputs.job-name }} at ${{ steps.python.outputs.url }} finished with '${{ steps.python.outputs.build_status }}' status."
+        else
+          result_comment="Job ${{ inputs.job-name }} failed."
+        fi
+        echo "result_comment=$result_comment" >> "$GITHUB_OUTPUT"
+      shell: bash
+    - name: Add result to summary
+      run: echo ${{ steps.result-comment.outputs.result_comment }} >> $GITHUB_STEP_SUMMARY
+      shell: bash
+    - name: Get PR number
+      id: pr_number
+      run: |
+        pr_num=""
+        if [[ "${{ github.event_name }}" == 'pull_request' ]]; then
+          pr_num=${{ github.event.pull_request.number }}
+        elif [[ "${{ github.event_name }}" == 'issue_comment' ]]; then
+          pr_num=${{ github.event.issue.number }}
+        elif [[ "${{ github.event_name }}" == 'merge_group' ]]; then
+          pr_num=$(echo "${{ github.ref }}" | sed -n 's/.*pr-\([0-9]*\).*/\1/p')
+        fi
+        echo "pr_number=$pr_num" >> "$GITHUB_OUTPUT"
+      shell: bash
+    - name: Add comment to PR
+      if: ${{ inputs.comment-pr == 'true' && steps.pr_number.outputs.pr_number == '' }}
+      uses: gooddata/github-actions-public/pr-comment@master
+      with:
+        vault-url: ${{ inputs.vault-url }}
+        job-reference: ${{ inputs.job-name }}
+        comment: ${{ steps.result-comment.outputs.result_comment }}
+    - name: Add comment to PR
+      if: ${{ inputs.comment-pr == 'true' && steps.pr_number.outputs.pr_number != ''}}
+      uses: gooddata/github-actions-public/pr-comment@master
+      with:
+        vault-url: ${{ inputs.vault-url }}
+        job-reference: ${{ inputs.job-name }}
+        comment: ${{ steps.result-comment.outputs.result_comment }}
+        pr-number: ${{steps.pr_number.outputs.pr_number}}
+    - name: Slack notify on failure
+      if: ${{ steps.python.outputs.build_status != 'SUCCESS' && inputs.slack-channel != '' }}
+      uses: slackapi/slack-github-action@v1.26.0
+      with:
+        channel-id: ${{ inputs.slack-channel }}
+        slack-message: ${{ steps.result-comment.outputs.result_comment }}
+      env:
+        SLACK_BOT_TOKEN: ${{ inputs.slack-token }}
+    - name: Fail if Jenkins job failed
+      if: ${{ steps.python.outputs.build_status != 'SUCCESS' }}
+      uses: actions/github-script@v7
+      with:
+        script: core.setFailed("${{ steps.result-comment.outputs.result_comment }}")

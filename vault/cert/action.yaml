@@ -1,0 +1,72 @@
+---
+# Copyright: (c) 2024, GoodData
+
+name: "Get Vault client certificate"
+description: "List Terraform modules changed by given event"
+inputs:
+  backend:
+    description: "Vault certificate backend to use (default usually okay)"
+    required: false
+    default: "client/alpha"
+  cn:
+    description: "Vault certificate common name"
+    required: true
+  role:
+    description: "Vault certificate role to use"
+    required: true
+  ttl:
+    description: "Certificate TTL to use (seconds; max 14400)"
+    required: false
+    default: "14400"
+  vault-auth-path:
+    description: "Vault auth backend path to use (default usually okay)"
+    required: false
+    default: "jwt/github"
+  vault-auth-role:
+    description: "Vault auth role to use for obtaining certificate"
+    required: true
+  vault-url:
+    description: "Vault API URL"
+    required: true
+outputs:
+  ca_chain:
+    description: "Certificate chain returned by Vault"
+    value: "${{ steps.cert.outputs.ca_chain }}"
+  certificate:
+    description: "Value of the issued certificate"
+    value: "${{ steps.cert.outputs.certificate }}"
+  private_key:
+    description: "Private key for the issued certificate"
+    value: "${{ steps.cert.outputs.private_key }}"
+runs:
+  using: "composite"
+  steps:
+    - name: Login into Vault
+      uses: hashicorp/vault-action@v3
+      with:
+        exportToken: true
+        method: jwt
+        path: ${{ inputs.vault-auth-path }}
+        role: ${{ inputs.vault-auth-role }}
+        url: ${{ inputs.vault-url }}
+    - name: Obtain Vault certificate
+      id: cert
+      run: |
+        response=`mktemp`
+        trap 'rm -f "$response"' EXIT
+
+        curl --fail-with-body -X POST -H "X-Vault-Token: $VAULT_TOKEN" \
+          ${{ inputs.vault-url }}/v1/pki/${{ inputs.backend }}/issue/${{ inputs.role }} \
+          -d '{"common_name": "${{ inputs.cn }}", "ttl": "${{ inputs.ttl }}"}' \
+          >$response
+
+        function out {
+          echo "$1<<EOF" >>$GITHUB_OUTPUT
+          jq -r "$2" $response | sed 's/^ */::add-mask::/'
+          jq -r "$2" $response >>$GITHUB_OUTPUT
+          echo 'EOF' >>$GITHUB_OUTPUT
+        }
+        out ca_chain '.data.ca_chain | join("")'
+        out certificate '.data.certificate'
+        out private_key '.data.private_key'
+      shell: bash
