@@ -1,0 +1,39 @@
+---
+# yamllint disable rule:line-length
+name: Fossa-oss PR scan (jenkins)
+
+on:
+  pull_request:
+concurrency:
+  group: ${{ github.event.repository.name }}-fossa-scanning-oss-zuul-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  fossa:
+    runs-on:
+      group: infra1-runners-arc
+      labels: runners-small
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    steps:
+      - name: Call Jenkins trigger
+        id: call-jenkins
+        uses: gooddata/github-actions-public/jenkins/trigger@master
+        with:
+          server: ${{ secrets.JENKINS_ADDRESS }}
+          folder: compliance
+          job-name: "${{ github.event.repository.name }}-fossa-scanning-oss-zuul"
+          vault-url: ${{ secrets.VAULT_ADDRESS }}
+          params: |-
+            {
+              "GH_BRANCH":"${{ github.base_ref }}",
+              "GH_REF":"${{ github.ref }}",
+              "GH_COMMIT":"${{ github.event.pull_request.head.sha }}",
+              "GH_URL":"git@github.com:",
+              "GH_CHANGE":"${{ github.event.pull_request.number }}",
+              "GH_PROJECT":"${{ github.repository }}",
+              "GH_PR_NUMBER":"${{ github.event.pull_request.number }}",
+              "BUILD_BY_GITHUB":"true",
+              "GH_PIPELINE":"gate"
+            }
