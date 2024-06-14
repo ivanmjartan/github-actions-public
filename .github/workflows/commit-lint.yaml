@@ -1,0 +1,92 @@
+---
+name: Lint Commit Messages
+
+on:
+  pull_request:
+  merge_group:
+
+jobs:
+  commit-lint:
+    runs-on:
+      group: infra1-runners-arc
+      labels: runners-small
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          set -eu
+          cat << EOF > commitlint.config.mjs
+          /* eslint-disable import/no-extraneous-dependencies */
+          import { maxLength } from '@commitlint/ensure';
+          import { default as conventionalConfig } from '@commitlint/config-conventional';
+          import { execSync } from 'child_process';
+          import toLines from '@commitlint/to-lines';  
+  
+          const headerMaxLength = 70;
+
+          const validateHeaderMaxLengthIgnoringDeps = (parsedCommit) => {
+            const { type, scope, header } = parsedCommit;
+            const isDepsCommit = type === 'chore' && scope === 'deps';
+
+            return [
+              isDepsCommit || maxLength(header, headerMaxLength),
+              \`header must not be longer than \${headerMaxLength}\`,
+            ];
+          }
+          
+          const validateRisk = process.env.GITHUB_REPOSITORY?.match(/gooddata\/(gdc-nas|gdc-ui|gooddata-ui-sdk)/)
+
+          export default {
+            extends: ['@commitlint/config-conventional'],
+            plugins: [
+              'commitlint-plugin-function-rules',
+              {
+                rules: {
+                  'risk-rule': (parsedCommit) => {
+                    const { type, subject } = parsedCommit;
+                    if (type === 'chore' && subject?.startsWith('update')) return [true]; // skip renovate and extimage bumps
+
+                    const trailers = execSync('git interpret-trailers --parse', {
+                      input: parsedCommit.raw || '',
+                    }).toString();
+                    const matches = toLines(trailers).filter((ln) => ln.match(/^risk:\s*nonprod|low|high/i)).length
+                    return [
+                      matches === 1,
+                      `Should have exactly one risk label of value nonprod|low|high, but ${matches} found.`,
+                    ];
+                  },
+                },
+              },
+            ],
+            rules: {
+              'header-max-length': [0],
+              'function-rules/header-max-length': [
+                2,
+                'always',
+                validateHeaderMaxLengthIgnoringDeps,
+              ],
+              'subject-case': [
+                2,
+                'never',
+                ['upper-case', 'camel-case', 'kebab-case', 'pascal-case', 'snake-case'],
+              ],
+              'type-enum': [
+                2,
+                'always',
+                [
+                  ...conventionalConfig.rules['type-enum'][2], // Include default types
+                  'config', // Configuration change i.e. hiera or gitops config change
+                ],
+              ],
+              'risk-rule': [
+                validateRisk ? 2 : 0,
+                'always',
+              ],
+            },
+          }
+          EOF
+          cat commitlint.config.mjs
+        shell: bash
+      - uses: wagoid/commitlint-github-action@v6
