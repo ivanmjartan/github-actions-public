@@ -38,6 +38,9 @@ jobs:
 
           const validateRisk = process.env.GITHUB_REPOSITORY?.match(/gooddata\/(gdc-nas|gdc-ui|gooddata-ui-sdk|gdc-panther)/)
 
+          console.log('validateRisk', validateRisk);
+          console.log('process.env.GITHUB_REPOSITORY', process.env.GITHUB_REPOSITORY);
+
           export default {
             extends: ['@commitlint/config-conventional'],
             plugins: [
@@ -46,13 +49,24 @@ jobs:
                 rules: {
                   'risk-rule': (parsedCommit) => {
                     const { type, subject } = parsedCommit;
+                    console.log('parsedCommit', parsedCommit);
+                    console.log('type', type);
+                    console.log('subject', subject);
+                    console.log('parsedCommit.raw', parsedCommit.raw);
+
                     if (type === 'chore' && subject?.startsWith('update')) return [true]; // skip renovate and extimage bumps
 
                     try {
                       const trailers = execSync('git interpret-trailers', ['--parse'], {
                         input: parsedCommit.raw || '',
                       }).toString();
+
+                      console.log('trailers', trailers);
+
                       const matches = toLines(trailers)?.filter((ln) => ln.match(/^risk:\s*(nonprod|low|high)/i))?.length;
+
+                      console.log('matches', matches);
+
                       return [
                         matches === 1,
                         `Should have exactly one risk label of value nonprod|low|high, but ${matches} found.`,
