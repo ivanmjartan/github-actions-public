@@ -48,14 +48,19 @@ jobs:
                     const { type, subject } = parsedCommit;
                     if (type === 'chore' && subject?.startsWith('update')) return [true]; // skip renovate and extimage bumps
 
-                    const trailers = execSync('git interpret-trailers --parse', {
-                      input: parsedCommit.raw || '',
-                    }).toString();
-                    const matches = toLines(trailers).filter((ln) => ln.match(/^risk:\s*nonprod|low|high/i)).length
-                    return [
-                      matches === 1,
-                      `Should have exactly one risk label of value nonprod|low|high, but ${matches} found.`,
-                    ];
+                    try {
+                      const trailers = execSync('git interpret-trailers', ['--parse'], {
+                        input: parsedCommit.raw || '',
+                      }).toString(); 
+                      const matches = toLines(trailers)?.filter((ln) => ln.match(/^risk:\s*nonprod|low|high/i))?.length
+                      return [
+                        matches === 1,
+                        `Should have exactly one risk label of value nonprod|low|high, but ${matches} found.`,
+                      ];
+                    } catch (err) {
+                      console.error(err.toString());
+                      return [false, 'Error while trying to find risk label'];
+                    }
                   },
                 },
               },
