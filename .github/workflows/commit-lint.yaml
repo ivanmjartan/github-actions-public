@@ -22,8 +22,8 @@ jobs:
           import { maxLength } from '@commitlint/ensure';
           import { default as conventionalConfig } from '@commitlint/config-conventional';
           import { execSync } from 'child_process';
-          import toLines from '@commitlint/to-lines';  
-  
+          import toLines from '@commitlint/to-lines';
+
           const headerMaxLength = 70;
 
           const validateHeaderMaxLengthIgnoringDeps = (parsedCommit) => {
@@ -35,7 +35,7 @@ jobs:
               \`header must not be longer than \${headerMaxLength}\`,
             ];
           }
-          
+
           const validateRisk = process.env.GITHUB_REPOSITORY?.match(/gooddata\/(gdc-nas|gdc-ui|gooddata-ui-sdk|gdc-panther)/)
 
           export default {
@@ -51,8 +51,8 @@ jobs:
                     try {
                       const trailers = execSync('git interpret-trailers', ['--parse'], {
                         input: parsedCommit.raw || '',
-                      }).toString(); 
-                      const matches = toLines(trailers)?.filter((ln) => ln.match(/^risk:\s*nonprod|low|high/i))?.length
+                      }).toString();
+                      const matches = toLines(trailers)?.filter((ln) => ln.match(/^risk:\s*(nonprod|low|high)/i))?.length;
                       return [
                         matches === 1,
                         `Should have exactly one risk label of value nonprod|low|high, but ${matches} found.`,
